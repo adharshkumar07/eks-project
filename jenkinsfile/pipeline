@@ -1,0 +1,60 @@
+pipeline {
+    agent any
+
+    environment {
+        AWS_REGION = 'us-east-1'
+        ECR_REPO_NAME = 'nginx-app'
+        IMAGE_TAG = "${BUILD_NUMBER}"
+        ECR_URI = "123456789012.dkr.ecr.us-east-1.amazonaws.com/${ECR_REPO_NAME}"
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                git credentialsId: 'your-git-cred-id', url: 'https://github.com/your-user/your-repo.git'
+            }
+        }
+
+        stage('Terraform Init & Apply') {
+            steps {
+                dir('terraform') {
+                    sh 'terraform init'
+                    sh 'terraform apply -auto-approve'
+                }
+            }
+        }
+
+        stage('Docker Build') {
+            steps {
+                script {
+                    sh "docker build -t ${ECR_REPO_NAME}:${IMAGE_TAG} ."
+                }
+            }
+        }
+
+        stage('ECR Login & Push') {
+            steps {
+                script {
+                    sh """
+                    aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_URI}
+                    docker tag ${ECR_REPO_NAME}:${IMAGE_TAG} ${ECR_URI}:${IMAGE_TAG}
+                    docker push ${ECR_URI}:${IMAGE_TAG}
+                    """
+                }
+            }
+        }
+
+        stage('Deploy to EKS') {
+            steps {
+                script {
+                    sh """
+                    aws eks --region ${AWS_REGION} update-kubeconfig --name your-eks-cluster
+                    sed -i 's|<IMAGE_URI>|${ECR_URI}:${IMAGE_TAG}|g' k8s/nginx-deployment.yaml
+                    kubectl apply -f k8s/nginx-deployment.yaml
+                    """
+                }
+            }
+        }
+    }
+}
+
